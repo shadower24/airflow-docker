@@ -1,0 +1,74 @@
+version: '3.8'
+
+# Shared environment variables for Airflow components
+x-airflow-common-env: &airflow-common-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD}@postgres/airflow
+  AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+  AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'false'
+  AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+
+# Shared volume configuration for Airflow components
+x-airflow-volumes: &airflow-volumes
+  - ./dags:/opt/airflow/dags
+  - ./logs:/opt/airflow/logs
+  - ./plugins:/opt/airflow/plugins
+  - ./raw_data:/opt/airflow/raw_data
+  - ./transform_data:/opt/airflow/transform_data
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  airflow-init:
+    # Custom airflow image with Java 17, Pandas and Pyspark installed
+    image: apache/airflow:2.10.3-custom
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_UPGRADE: 'true'
+    volumes:
+      *airflow-volumes
+    command: bash -c 'airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com'
+
+  webserver:
+    image: apache/airflow:2.10.3-custom
+    depends_on:
+      - postgres
+      - airflow-init
+    restart: unless-stopped
+    environment:
+      <<: *airflow-common-env
+    volumes:
+      *airflow-volumes
+    ports:
+      - "8080:8080"
+    command: webserver
+
+  scheduler:
+    image: apache/airflow:2.10.3-custom
+    depends_on:
+      - postgres
+      - airflow-init
+    environment:
+      <<: *airflow-common-env
+    volumes:
+      *airflow-volumes
+    command: scheduler
+
+volumes:
+  postgres_data:
